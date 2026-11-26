@@ -2,7 +2,7 @@ name: Rendiconto GAIA
 
 on:
   schedule:
-    - cron: "23 */3 * * *"   # ogni 3 ore
+    - cron: "23 */3 * * *"   # ogni ora
   workflow_dispatch:          # pulsante "Run workflow" per avviarlo a mano
 
 permissions:
