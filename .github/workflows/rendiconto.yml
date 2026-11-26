@@ -1,0 +1,49 @@
+name: Rendiconto GAIA
+
+on:
+  schedule:
+    - cron: "23 */3 * * *"   # ogni 3 ore
+  workflow_dispatch:          # pulsante "Run workflow" per avviarlo a mano
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  crea:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Europe/Rome
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Installa programmi
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Leggi GAIA e crea la pagina
+        env:
+          GAIA_EMAIL: ${{ secrets.GAIA_EMAIL }}
+          GAIA_PASSWORD: ${{ secrets.GAIA_PASSWORD }}
+          PASSWORD_PAGINA: ${{ secrets.PASSWORD_PAGINA }}
+        run: python rendiconto.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: sito
+
+  pubblica:
+    needs: crea
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
