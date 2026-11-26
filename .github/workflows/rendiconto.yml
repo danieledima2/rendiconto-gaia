@@ -40,6 +40,8 @@ jobs:
           GAIA_PASSWORD: ${{ secrets.GAIA_PASSWORD }}
           PASSWORD_PAGINA: ${{ secrets.PASSWORD_PAGINA }}
           PUSH_ISCRIZIONI: ${{ secrets.PUSH_ISCRIZIONI }}
+          ICLOUD_EMAIL: ${{ secrets.ICLOUD_EMAIL }}
+          ICLOUD_PASSWORD_APP: ${{ secrets.ICLOUD_PASSWORD_APP }}
           NOTIFICA_DISPONIBILI: "no"   # metti "si" per un avviso sui nuovi turni senza volontari
         run: python rendiconto.py
       - name: Salva lo stato delle notifiche
