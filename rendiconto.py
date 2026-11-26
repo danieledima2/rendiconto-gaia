@@ -34,6 +34,7 @@ SETTIMANE_CALENDARIO = int(os.environ.get("SETTIMANE_CALENDARIO", "4"))
 TETTO_ORE_TURNO = float(os.environ.get("TETTO_ORE_TURNO", "12"))  # oltre, il turno e' "sospetto"
 TURNI_RICHIESTI = int(os.environ.get("TURNI_RICHIESTI", "6"))      # regola: 6 turni...
 MESI_PERIODO = int(os.environ.get("MESI_PERIODO", "2"))            # ...ogni 2 mesi (gen-feb, mar-apr, ...)
+GIORNI_ALLARME = int(os.environ.get("GIORNI_ALLARME", "30"))       # avviso rosso negli ultimi 30 giorni
 
 MESI = {"gen": 1, "feb": 2, "mar": 3, "apr": 4, "mag": 5, "giu": 6,
         "lug": 7, "ago": 8, "set": 9, "ott": 10, "nov": 11, "dic": 12}
@@ -372,6 +373,10 @@ def calcola_regola(effettuati, da_fare, adesso):
         livello, messaggio = "attenzione", (
             f"{len(fatti)} turni fatti su {TURNI_RICHIESTI}: sarai in regola se svolgi "
             f"i {len(previsti)} turni già programmati.")
+    elif giorni_rimasti > GIORNI_ALLARME:
+        livello, messaggio = "attenzione", (
+            f"{len(fatti)} turni fatti su {TURNI_RICHIESTI} (già programmati {len(previsti)}): "
+            f"ne mancano {mancano_con_previsti}, hai tempo fino al {(fine - timedelta(days=1)):%d/%m}.")
     else:
         livello, messaggio = "allarme", (
             f"Ti mancano {mancano_con_previsti} turni da prenotare entro "
@@ -453,7 +458,7 @@ def tabella_turni(turni, colonne_extra=None, vuoto="Nessun turno.", per_mese=Fal
     return "".join(parti)
 
 
-def costruisci_pagina(d):
+def costruisci_pagina(d, file_calendario=""):
     adesso = d["adesso"]
     tot, ua = d["totale"], d["ultimo_anno"]
     stat_gaia = d["statistiche"][-1] if d["statistiche"] else None
@@ -643,6 +648,36 @@ def costruisci_pagina(d):
     else:
         qualifiche = '<p class="vuoto">Qualifiche non disponibili.</p>'
 
+    # --- notifiche e calendario
+    notifiche = f"""
+<div class="box"><h3 style="margin-top:0">🔔 Notifiche sul telefono</h3>
+<div id="stato-notifiche" class="sub">Controllo lo stato delle notifiche…</div>
+<button type="button" id="attiva-notifiche" class="bottone grande">Attiva notifiche</button>
+<div id="blocco-codice" style="display:none">
+<p><b>Ultimo passo:</b> copia questo codice e incollalo su GitHub in un Secret chiamato
+<code>PUSH_ISCRIZIONI</code> (Settings → Secrets and variables → Actions).
+Se hai già il Secret, aggiungi il codice su una nuova riga.</p>
+<textarea id="codice-iscrizione" readonly rows="5"></textarea>
+<button type="button" id="copia-codice" class="bottone">Copia codice</button>
+</div>
+<details><summary class="sub">Come funziona</summary>
+<ol class="sub"><li>Sull'iPhone apri questa pagina in <b>Safari</b>, tocca <b>Condividi</b> → <b>Aggiungi alla schermata Home</b>.</li>
+<li>Apri il rendiconto <b>dall'icona sulla Home</b>, vieni in questa scheda e tocca <b>Attiva notifiche</b>, poi <b>Consenti</b>.</li>
+<li>Copia il codice e mettilo nel Secret <code>PUSH_ISCRIZIONI</code> su GitHub.</li>
+<li>Al prossimo aggiornamento arriva la notifica <b>“Notifiche attive”</b>.</li></ol></details>
+<p class="sub">Riceverai: turno approvato, richiesta in attesa o non approvata, promemoria il giorno prima e
+qualche ora prima del turno, avviso se non sei in regola con i {TURNI_RICHIESTI} turni ogni {MESI_PERIODO} mesi,
+nuove qualifiche. Le notifiche arrivano al massimo ogni 3 ore, quando GitHub aggiorna i dati.</p></div>
+
+<div class="box"><h3 style="margin-top:0">📅 Turni nel calendario dell'iPhone</h3>
+<p>Tocca il link e conferma con <b>Abbonati</b>: i turni approvati compaiono nel Calendario e si aggiornano da soli.</p>
+<p><a class="bottone" data-calendario="{e(file_calendario)}" href="#">Aggiungi al Calendario</a></p>
+<details><summary class="sub">Se il link non funziona</summary>
+<p class="sub">Impostazioni → Calendario → Account → Aggiungi account → Altro → Aggiungi calendario sottoscritto,
+e incolla questo indirizzo:</p><p class="indirizzo" data-calendario-testo="{e(file_calendario)}"></p></details>
+<p class="sub">L'indirizzo del calendario è segreto e impossibile da indovinare, ma chi lo conosce può vedere i tuoi turni: non condividerlo.</p></div>
+"""
+
     schede = [
         ("riepilogo", "Riepilogo", riepilogo),
         ("effettuati", f"Effettuati ({len(d['effettuati'])})", effettuati),
@@ -651,6 +686,7 @@ def costruisci_pagina(d):
         ("disponibili", f"Disponibili ({len(d['disponibili'])})", disponibili),
         ("qualifiche", f"Qualifiche ({len(d['qualifiche'])})", qualifiche),
         ("corsi", f"Corsi ({len(d['corsi'])})", corsi),
+        ("notifiche", "🔔 Notifiche", notifiche),
     ]
     radio = "".join(
         f'<input type="radio" name="tab" id="t-{k}"{" checked" if i == 0 else ""}>'
@@ -720,6 +756,11 @@ td a{font-weight:600;text-decoration:none}
 .tag.giallo{background:#fff4d6;color:#8a5a00}.tag.grigio{background:#eee;color:#555}.tag.blu{background:#e7f0fd;color:#1859b5}
 .vuoto{color:var(--grigio);font-style:italic}
 .voce.spenta{opacity:.6}
+.bottone.grande{padding:12px 18px;font-size:1rem;border:0;margin:10px 0;cursor:pointer}
+button.bottone{border:0;cursor:pointer;font-family:inherit}
+textarea{width:100%;box-sizing:border-box;font-family:monospace;font-size:.75rem;border:1px solid var(--bordo);border-radius:10px;padding:8px;margin:6px 0}
+.indirizzo{word-break:break-all;font-family:monospace;font-size:.8rem;background:var(--sfondo);padding:8px;border-radius:8px}
+code{background:var(--sfondo);padding:1px 5px;border-radius:5px}
 .bottone{display:inline-block;padding:7px 12px;border-radius:10px;background:var(--rosso);color:#fff!important;text-decoration:none;font-weight:600;font-size:.85rem}
 footer{margin-top:28px;color:var(--grigio);font-size:.8rem}
 @media(max-width:600px){.voce{grid-template-columns:1fr auto}.voce .ora{grid-column:1/-1}}
@@ -744,6 +785,12 @@ PAGINA_ESTERNA = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Turni CRI">
+<meta name="theme-color" content="#cc0000">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icona-192.png">
 <title>Rendiconto turni CRI</title>
 <style>
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f5f7;color:#1d1d1f}
@@ -764,6 +811,7 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 <div id="contenuto"></div>
 <script>
 const DATI = __DATI__;
+const VAPID = "__VAPID__";
 const b = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function decifra(pw){
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);
@@ -777,6 +825,7 @@ async function mostra(pw, salva){
     const h = await decifra(pw);
     document.getElementById("blocco").remove();
     document.getElementById("contenuto").innerHTML = h;
+    dopoApertura();
     if(salva){ try{ localStorage.setItem("rendiconto_pw", pw); }catch(e){} }
     return true;
   }catch(e){ return false; }
@@ -787,6 +836,86 @@ async function apri(ev){
   const ok = await mostra(document.getElementById("pw").value, document.getElementById("ricorda").checked);
   if(!ok){ document.getElementById("errore").textContent = "Password sbagliata"; }
 }
+if ("serviceWorker" in navigator) { navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+function apriScheda(){
+  const k = (location.hash || "").slice(1);
+  const r = k && document.getElementById("t-" + k);
+  if (r) { r.checked = true; }
+}
+window.addEventListener("hashchange", apriScheda);
+function chiaveBin(s){
+  s = s.replace(/-/g,"+").replace(/_/g,"/"); while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+function scrivi(id, t){ const el = document.getElementById(id); if (el) el.textContent = t; }
+function mostraCodice(sub){
+  document.getElementById("blocco-codice").style.display = "block";
+  document.getElementById("codice-iscrizione").value = JSON.stringify(sub);
+}
+async function statoNotifiche(){
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const installata = window.navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    scrivi("stato-notifiche", ios && !installata
+      ? "Per attivare le notifiche, prima aggiungi questa pagina alla schermata Home (Safari → Condividi → Aggiungi alla schermata Home) e aprila da lì."
+      : "Questo browser non supporta le notifiche web. Sull'iPhone serve iOS 16.4 o successivo.");
+    document.getElementById("attiva-notifiche").style.display = "none";
+    return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub && Notification.permission === "granted") {
+      scrivi("stato-notifiche", "✔ Notifiche attive su questo dispositivo. Se non l'hai ancora fatto, copia il codice qui sotto nel Secret PUSH_ISCRIZIONI.");
+      document.getElementById("attiva-notifiche").textContent = "Mostra di nuovo il codice";
+      document.getElementById("attiva-notifiche").dataset.giaAttive = "1";
+    } else if (Notification.permission === "denied") {
+      scrivi("stato-notifiche", "Le notifiche sono bloccate: riattivale da Impostazioni → Notifiche → Turni CRI.");
+    } else {
+      scrivi("stato-notifiche", "Le notifiche non sono ancora attive su questo dispositivo.");
+    }
+  } catch (e) { scrivi("stato-notifiche", "Le notifiche non sono ancora attive su questo dispositivo."); }
+}
+async function attivaNotifiche(){
+  try {
+    const permesso = await Notification.requestPermission();
+    if (permesso !== "granted") { scrivi("stato-notifiche", "Permesso non concesso: le notifiche restano spente."); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) { sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: chiaveBin(VAPID)}); }
+    mostraCodice(sub);
+    scrivi("stato-notifiche", "✔ Notifiche attivate su questo dispositivo. Ora copia il codice qui sotto su GitHub.");
+  } catch (e) { scrivi("stato-notifiche", "Attivazione non riuscita: " + e.message); }
+}
+function dopoApertura(){
+  apriScheda();
+  document.querySelectorAll("[data-calendario]").forEach(a => {
+    const u = new URL(a.dataset.calendario, location.href);
+    a.href = "webcal://" + u.host + u.pathname;
+  });
+  document.querySelectorAll("[data-calendario-testo]").forEach(p => {
+    const u = new URL(p.dataset.calendarioTesto, location.href);
+    p.textContent = "webcal://" + u.host + u.pathname;
+  });
+  const b = document.getElementById("attiva-notifiche");
+  if (b) {
+    b.addEventListener("click", async () => {
+      if (b.dataset.giaAttive) {
+        const reg = await navigator.serviceWorker.ready;
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) { mostraCodice(sub); return; }
+      }
+      attivaNotifiche();
+    });
+    statoNotifiche();
+  }
+  const c = document.getElementById("copia-codice");
+  if (c) c.addEventListener("click", async () => {
+    const t = document.getElementById("codice-iscrizione");
+    try { await navigator.clipboard.writeText(t.value); c.textContent = "Copiato ✔"; }
+    catch (e) { t.select(); document.execCommand("copy"); c.textContent = "Copiato ✔"; }
+  });
+}
 (async()=>{
   let pw = null; try{ pw = localStorage.getItem("rendiconto_pw"); }catch(e){}
   if(pw && !(await mostra(pw,false))){ try{ localStorage.removeItem("rendiconto_pw"); }catch(e){} }
@@ -794,11 +923,61 @@ async function apri(ev){
 </script></body></html>"""
 
 
-def scrivi_sito(interno, password, cartella="sito"):
+SERVICE_WORKER = """self.addEventListener("install", e => self.skipWaiting());
+self.addEventListener("activate", e => e.waitUntil(self.clients.claim()));
+self.addEventListener("push", e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = {body: e.data ? e.data.text() : ""}; }
+  e.waitUntil(self.registration.showNotification(d.title || "Turni CRI", {
+    body: d.body || "", icon: "icona-192.png", badge: "icona-192.png", data: {tab: d.tab || ""}
+  }));
+});
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = self.registration.scope + (e.notification.data && e.notification.data.tab ? "#" + e.notification.data.tab : "");
+  e.waitUntil(clients.matchAll({type: "window", includeUncontrolled: true}).then(lista => {
+    for (const c of lista) { if ("focus" in c) { c.navigate(url).catch(() => {}); return c.focus(); } }
+    return clients.openWindow(url);
+  }));
+});
+"""
+
+MANIFEST = {
+    "name": "Rendiconto turni CRI", "short_name": "Turni CRI",
+    "start_url": "./", "scope": "./", "display": "standalone",
+    "background_color": "#f5f5f7", "theme_color": "#cc0000",
+    "icons": [{"src": "icona-192.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "icona-512.png", "sizes": "512x512", "type": "image/png"}],
+}
+
+
+def disegna_icona(lato):
+    """Icona semplice: calendario bianco con spunta su fondo rosso."""
+    from PIL import Image, ImageDraw
+    k = lato / 512
+    img = Image.new("RGB", (lato, lato), (204, 0, 0))
+    d = ImageDraw.Draw(img)
+    d.rounded_rectangle([96 * k, 120 * k, 416 * k, 420 * k], radius=36 * k, fill="white")
+    d.rectangle([96 * k, 190 * k, 416 * k, 200 * k], fill=(204, 0, 0))
+    for x in (176, 336):
+        d.rounded_rectangle([(x - 14) * k, 88 * k, (x + 14) * k, 160 * k], radius=14 * k, fill="white")
+    d.line([(176 * k, 310 * k), (236 * k, 368 * k), (346 * k, 250 * k)], fill=(204, 0, 0), width=int(34 * k), joint="curve")
+    return img
+
+
+def scrivi_sito(interno, password, cartella="sito", vapid_pubblica="", calendario=None):
     Path(cartella).mkdir(exist_ok=True)
-    pagina = PAGINA_ESTERNA.replace("__DATI__", json.dumps(cifra(interno, password)))
+    pagina = (PAGINA_ESTERNA.replace("__DATI__", json.dumps(cifra(interno, password)))
+              .replace("__VAPID__", vapid_pubblica))
     Path(cartella, "index.html").write_text(pagina, encoding="utf-8")
     Path(cartella, "robots.txt").write_text("User-agent: *\nDisallow: /\n", encoding="utf-8")
+    Path(cartella, "sw.js").write_text(SERVICE_WORKER, encoding="utf-8")
+    Path(cartella, "manifest.webmanifest").write_text(json.dumps(MANIFEST, ensure_ascii=False), encoding="utf-8")
+    for nome, lato in (("icona-192.png", 192), ("icona-512.png", 512), ("apple-touch-icon.png", 180)):
+        disegna_icona(lato).save(Path(cartella, nome))
+    if calendario:
+        nome_file, contenuto = calendario
+        Path(cartella, nome_file).write_text(contenuto, encoding="utf-8", newline="")
 
 
 # ------------------------------------------------------------------ GAIA (Playwright)
@@ -899,7 +1078,19 @@ def main():
     if not dati["effettuati"] and not dati["da_fare"] and not dati["in_sospeso"]:
         sys.exit("ERRORE: nello storico non ho trovato nessun turno. La pagina di GAIA potrebbe essere cambiata.")
 
-    scrivi_sito(costruisci_pagina(dati), password_pagina)
+    import notifiche
+    prova = len(sys.argv) >= 3 and sys.argv[1] == "--prova"
+    file_cal = notifiche.nome_calendario(password_pagina)
+    _, vapid_pubblica = notifiche.chiavi_vapid(password_pagina)
+    scrivi_sito(costruisci_pagina(dati, file_cal), password_pagina, vapid_pubblica=vapid_pubblica,
+                calendario=(file_cal, notifiche.crea_calendario(dati, adesso, titolo_breve)))
+    notifiche.gestisci_notifiche(
+        dati, adesso, password_pagina, titolo_breve,
+        file_stato=os.environ.get("FILE_STATO", "stato/stato.json"),
+        iscrizioni_testo=os.environ.get("PUSH_ISCRIZIONI", ""),
+        contatto="mailto:" + (os.environ.get("GAIA_EMAIL") or "rendiconto@example.com"),
+        prova=prova,
+        notifica_disponibili=os.environ.get("NOTIFICA_DISPONIBILI", "no").lower() in ("si", "sì", "yes", "1"))
     # Solo numeri nei log (i log di un repository pubblico sono visibili a tutti)
     print(f"Fatto: {len(dati['effettuati'])} effettuati, {len(dati['da_fare'])} da fare, "
           f"{len(dati['in_sospeso'])} in sospeso, {len(dati['disponibili'])} disponibili, "
