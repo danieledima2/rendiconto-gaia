@@ -28,12 +28,25 @@ jobs:
         run: |
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
-      - name: Leggi GAIA e crea la pagina
+      - name: Recupera lo stato delle notifiche
+        uses: actions/cache/restore@v4
+        with:
+          path: stato
+          key: stato-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: stato-
+      - name: Leggi GAIA, crea la pagina e invia le notifiche
         env:
           GAIA_EMAIL: ${{ secrets.GAIA_EMAIL }}
           GAIA_PASSWORD: ${{ secrets.GAIA_PASSWORD }}
           PASSWORD_PAGINA: ${{ secrets.PASSWORD_PAGINA }}
+          PUSH_ISCRIZIONI: ${{ secrets.PUSH_ISCRIZIONI }}
+          NOTIFICA_DISPONIBILI: "no"   # metti "si" per un avviso sui nuovi turni senza volontari
         run: python rendiconto.py
+      - name: Salva lo stato delle notifiche
+        uses: actions/cache/save@v4
+        with:
+          path: stato
+          key: stato-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: sito
