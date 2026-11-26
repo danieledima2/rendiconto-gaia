@@ -228,12 +228,48 @@ def leggi_corsi(pagina):
     return corsi
 
 
+def leggi_qualifiche(pagina):
+    """Pagina Curriculum > Qualifiche CRI (/utente/curriculum/TC/)."""
+    soup = BeautifulSoup(pagina, "html.parser")
+    qualifiche = []
+    for tr in soup.find_all("tr"):
+        celle = tr.find_all("td", recursive=False)
+        if len(celle) < 2:
+            continue
+        titolo = celle[0].find("p", class_="grassetto")
+        if not titolo:
+            continue
+        attestato = celle[0].find("a", href=re.compile("attestato"))
+        stato = celle[0].find("span")
+        dettagli = celle[1].get_text(" ")
+        data = re.search(r"(\d\d/\d\d/\d{4})", dettagli)
+        tipo = re.search(r"Corso formazione asincrono[^\n<]*", dettagli)
+        qualifiche.append({
+            "nome": pulisci(titolo.get_text()),
+            "stato": pulisci(stato.get_text()) if stato else "",
+            "data": datetime.strptime(data.group(1), "%d/%m/%Y").replace(tzinfo=FUSO) if data else None,
+            "attestato": link_assoluto(attestato["href"]) if attestato else "",
+            "online": bool(tipo) or "online" in titolo.get_text().lower(),
+        })
+    # se la stessa qualifica compare piu' volte (rinnovi), segno la piu' recente
+    piu_recente = {}
+    for q in qualifiche:
+        k = q["nome"].lower()
+        if q["data"] and (k not in piu_recente or q["data"] > piu_recente[k]["data"]):
+            piu_recente[k] = q
+    for q in qualifiche:
+        uguali = [x for x in qualifiche if x["nome"].lower() == q["nome"].lower()]
+        q["volte"] = len(uguali)
+        q["superata"] = len(uguali) > 1 and piu_recente.get(q["nome"].lower()) is not q
+    return sorted(qualifiche, key=lambda q: q["data"] or datetime.min.replace(tzinfo=FUSO), reverse=True)
+
+
 # ------------------------------------------------------------------ calcoli
 def ore(t):
     return (t["fine"] - t["inizio"]).total_seconds() / 3600
 
 
-def analizza(storico, statistiche, calendario, corsi, adesso):
+def analizza(storico, statistiche, calendario, corsi, adesso, qualifiche=None):
     approvati = [t for t in storico if t["stato"].lower().startswith("approvat")]
     effettuati = sorted([t for t in approvati if t["fine"] <= adesso],
                         key=lambda t: t["inizio"], reverse=True)
@@ -299,6 +335,7 @@ def analizza(storico, statistiche, calendario, corsi, adesso):
         "sospetti": [t for t in effettuati + da_fare if t["sospetto"]],
         "disponibili": sorted(disponibili, key=lambda t: t["inizio"]),
         "corsi": corsi_ord,
+        "qualifiche": qualifiche or [],
     }
 
 
@@ -580,12 +617,39 @@ def costruisci_pagina(d):
         parti.append(f'<h4>{e(nomi_gruppi[gruppo])} ({len(lista)})</h4><div class="lista">{"".join(voci)}</div>')
     corsi = "".join(parti) or '<p class="vuoto">Nessun corso aperto.</p>'
 
+    # --- qualifiche
+    if d["qualifiche"]:
+        voci = []
+        for q in d["qualifiche"]:
+            tag = []
+            if q["superata"]:
+                tag.append('<span class="tag grigio">rinnovata</span>')
+            elif q["volte"] > 1:
+                tag.append('<span class="tag verde">più recente</span>')
+            if q["online"]:
+                tag.append('<span class="tag blu">online</span>')
+            if q["stato"] and q["stato"].lower() != "confermato":
+                tag.append(f'<span class="tag giallo">{e(q["stato"])}</span>')
+            pdf = (f'<a class="bottone" href="{e(q["attestato"])}" target="_blank" rel="noopener">📄 Attestato</a>'
+                   if q["attestato"] else '<span class="sub">nessun attestato</span>')
+            voci.append(
+                f'<div class="voce{" spenta" if q["superata"] else ""}">'
+                f'<div class="ora">{e(f_data(q["data"], False))}</div>'
+                f'<div class="cosa"><b>{e(q["nome"])}</b><div>{" ".join(tag)}</div></div>'
+                f'<div class="posti">{pdf}</div></div>')
+        qualifiche = (f'<p class="sub">{len(d["qualifiche"])} qualifiche su GAIA. L\'attestato si scarica '
+                      f'da GAIA: se non sei già entrato, GAIA ti chiede prima l\'accesso.</p>'
+                      f'<div class="lista">{"".join(voci)}</div>')
+    else:
+        qualifiche = '<p class="vuoto">Qualifiche non disponibili.</p>'
+
     schede = [
         ("riepilogo", "Riepilogo", riepilogo),
         ("effettuati", f"Effettuati ({len(d['effettuati'])})", effettuati),
         ("dafare", f"Da fare ({len(d['da_fare'])})", da_fare),
         ("sospeso", f"In sospeso ({len(d['in_sospeso'])})", in_sospeso),
         ("disponibili", f"Disponibili ({len(d['disponibili'])})", disponibili),
+        ("qualifiche", f"Qualifiche ({len(d['qualifiche'])})", qualifiche),
         ("corsi", f"Corsi ({len(d['corsi'])})", corsi),
     ]
     radio = "".join(
@@ -655,6 +719,8 @@ td a{font-weight:600;text-decoration:none}
 .tag.rosso{background:#fde8e8;color:#b00000}.tag.verde{background:#e6f4ea;color:#1a7f37}
 .tag.giallo{background:#fff4d6;color:#8a5a00}.tag.grigio{background:#eee;color:#555}.tag.blu{background:#e7f0fd;color:#1859b5}
 .vuoto{color:var(--grigio);font-style:italic}
+.voce.spenta{opacity:.6}
+.bottone{display:inline-block;padding:7px 12px;border-radius:10px;background:var(--rosso);color:#fff!important;text-decoration:none;font-weight:600;font-size:.85rem}
 footer{margin-top:28px;color:var(--grigio);font-size:.8rem}
 @media(max-width:600px){.voce{grid-template-columns:1fr auto}.voce .ora{grid-column:1/-1}}
 """
@@ -784,8 +850,16 @@ def scarica_da_gaia(email, password):
         print("Lettura corsi aperti...")
         pagina.goto(f"{GAIA}/aspirante/corsi/")
         corsi = pagina.content()
+
+        print("Lettura qualifiche...")
+        try:
+            pagina.goto(f"{GAIA}/utente/curriculum/TC/")
+            qualifiche = pagina.content()
+        except Exception:
+            print("Avviso: pagina qualifiche non letta.")
+            qualifiche = ""
         browser.close()
-    return storico, calendari, corsi
+    return storico, calendari, corsi, qualifiche
 
 
 # ------------------------------------------------------------------ avvio
@@ -796,6 +870,8 @@ def main():
         storico = (cartella / "storico.html").read_text(encoding="utf-8")
         calendari = [(cartella / "calendario.html").read_text(encoding="utf-8")]
         corsi = (cartella / "corsi.html").read_text(encoding="utf-8")
+        file_q = cartella / "qualifiche.html"
+        qualifiche = file_q.read_text(encoding="utf-8") if file_q.exists() else ""
         if len(sys.argv) >= 4:
             adesso = datetime.strptime(sys.argv[3], "%Y-%m-%d %H:%M").replace(tzinfo=FUSO)
         password_pagina = os.environ.get("PASSWORD_PAGINA", "prova")
@@ -807,7 +883,7 @@ def main():
                                    ("PASSWORD_PAGINA", password_pagina)) if not v]
         if mancanti:
             sys.exit("ERRORE: mancano questi Secrets su GitHub: " + ", ".join(mancanti))
-        storico, calendari, corsi = scarica_da_gaia(email, password)
+        storico, calendari, corsi, qualifiche = scarica_da_gaia(email, password)
 
     calendario, visti = [], set()
     for c in calendari:
@@ -818,7 +894,7 @@ def main():
                 calendario.append(t)
 
     dati = analizza(leggi_storico(storico), leggi_statistiche(storico),
-                    calendario, leggi_corsi(corsi), adesso)
+                    calendario, leggi_corsi(corsi), adesso, leggi_qualifiche(qualifiche))
 
     if not dati["effettuati"] and not dati["da_fare"] and not dati["in_sospeso"]:
         sys.exit("ERRORE: nello storico non ho trovato nessun turno. La pagina di GAIA potrebbe essere cambiata.")
@@ -827,7 +903,7 @@ def main():
     # Solo numeri nei log (i log di un repository pubblico sono visibili a tutti)
     print(f"Fatto: {len(dati['effettuati'])} effettuati, {len(dati['da_fare'])} da fare, "
           f"{len(dati['in_sospeso'])} in sospeso, {len(dati['disponibili'])} disponibili, "
-          f"{len(dati['corsi'])} corsi.")
+          f"{len(dati['corsi'])} corsi, {len(dati['qualifiche'])} qualifiche.")
 
 
 if __name__ == "__main__":
