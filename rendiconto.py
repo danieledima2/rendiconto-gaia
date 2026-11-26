@@ -453,12 +453,15 @@ def tabella_turni(turni, colonne_extra=None, vuoto="Nessun turno.", per_mese=Fal
             quando = f'{f_data(t["inizio"], False)}<br>{t["inizio"]:%H:%M}–{t["fine"]:%H:%M}'
         else:
             quando = f'{f_data(t["inizio"])}<br>→ {f_data(t["fine"])}'
+        import extra as _x
         parti.append(
-            f'<a class="voce" href="{e(t["link"])}" target="_blank" rel="noopener">'
+            f'<div class="voce">'
             f'<div class="ora">{quando}</div>'
-            f'<div class="cosa"><b>{e(titolo_breve(t["turno"]))}</b>'
-            f'<div class="sub">{e(t["attivita"])}</div>{segno}{riga_impegni(t)}</div>'
-            f'<div class="posti">{extra}</div></a>')
+            f'<div class="cosa"><a class="titolo" href="{e(t["link"])}" target="_blank" rel="noopener">'
+            f'<b>{e(titolo_breve(t["turno"]))}</b></a>'
+            f'<div class="sub">{e(t["attivita"])}</div>{segno}{riga_impegni(t)}'
+            f'{_x.riga_dettagli_turno(t) if "partenza" in t else ""}</div>'
+            f'<div class="posti">{extra}</div></div>')
     parti.append("</div>")
     return "".join(parti)
 
@@ -689,7 +692,7 @@ Se hai già il Secret, aggiungi il codice su una nuova riga.</p>
 <li>Al prossimo aggiornamento arriva la notifica <b>“Notifiche attive”</b>.</li></ol></details>
 <p class="sub">Riceverai: turno approvato, richiesta in attesa o non approvata, promemoria il giorno prima e
 qualche ora prima del turno, avviso se non sei in regola con i {TURNI_RICHIESTI} turni ogni {MESI_PERIODO} mesi,
-nuove qualifiche. Le notifiche arrivano al massimo ogni 3 ore, quando GitHub aggiorna i dati.</p></div>
+nuove qualifiche. Le notifiche arrivano quando GitHub aggiorna i dati, circa ogni ora.</p></div>
 
 <div class="box"><h3 style="margin-top:0">📅 Turni nel calendario dell'iPhone</h3>
 <p>Tocca il link e conferma con <b>Abbonati</b>: i turni approvati compaiono nel Calendario e si aggiornano da soli.</p>
@@ -707,6 +710,8 @@ e incolla questo indirizzo:</p><p class="indirizzo" data-calendario-testo="{e(fi
         ("sospeso", f"In sospeso ({len(d['in_sospeso'])})", in_sospeso),
         ("disponibili", f"Disponibili ({len(d['disponibili'])})", disponibili),
         ("qualifiche", f"Qualifiche ({len(d['qualifiche'])})", qualifiche),
+        ("grafici", "📊 Grafici", __import__("extra").scheda_grafici(d)),
+        ("resoconto", "🖨️ Resoconto", __import__("extra").scheda_resoconto(d, os.environ.get("NOME_VOLONTARIO", ""))),
         ("corsi", f"Corsi ({len(d['corsi'])})", corsi),
         ("notifiche", "🔔 Notifiche", notifiche),
     ]
@@ -719,7 +724,7 @@ e incolla questo indirizzo:</p><p class="indirizzo" data-calendario-testo="{e(fi
         f'#t-{k}:checked~nav label[for=t-{k}]{{background:var(--rosso);color:#fff}}'
         f'#t-{k}:checked~main .p-{k}{{display:block}}' for k, _, _ in schede)
 
-    return (f'<style>{CSS_INTERNO}{css_tab}</style>'
+    return (f'<style>{CSS_INTERNO}{__import__("extra").CSS_EXTRA}{css_tab}</style>'
             f'<div class="app">{radio}<header><h1>Rendiconto turni CRI</h1>'
             f'<div class="sub">Aggiornato {e(f_data(adesso))}</div></header>'
             f'<nav>{etichette}</nav><main>{pannelli}</main>'
@@ -768,6 +773,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 tr.tot td{font-weight:700;background:var(--sfondo)}
 a{color:inherit}
 td a{font-weight:600;text-decoration:none}
+a.titolo{text-decoration:none}
 .lista{display:flex;flex-direction:column;gap:6px}
 .voce{display:grid;grid-template-columns:130px 1fr auto;gap:10px;align-items:start;background:#fff;border:1px solid var(--bordo);border-radius:12px;padding:10px 12px;text-decoration:none}
 .voce.mia{border-left:4px solid #1a7f37}
@@ -933,12 +939,39 @@ function dopoApertura(){
     });
     statoNotifiche();
   }
+  impostaResoconto();
   const c = document.getElementById("copia-codice");
   if (c) c.addEventListener("click", async () => {
     const t = document.getElementById("codice-iscrizione");
     try { await navigator.clipboard.writeText(t.value); c.textContent = "Copiato ✔"; }
     catch (e) { t.select(); document.execCommand("copy"); c.textContent = "Copiato ✔"; }
   });
+}
+function impostaResoconto(){
+  const da = document.getElementById("res-da"), a = document.getElementById("res-a");
+  if (!da || !a) return;
+  const nome = document.getElementById("res-nome");
+  try { const n = localStorage.getItem("rendiconto_nome"); if (n && !nome.value) nome.value = n; } catch (e) {}
+  const it = s => s ? s.split("-").reverse().join("/") : "";
+  function aggiorna(){
+    let turni = 0, ore = 0;
+    document.querySelectorAll(".res-riga").forEach(r => {
+      const g = r.dataset.giorno, dentro = (!da.value || g >= da.value) && (!a.value || g <= a.value);
+      r.classList.toggle("fuori", !dentro);
+      if (dentro) { turni++; ore += parseFloat(r.dataset.ore); }
+    });
+    document.getElementById("res-periodo").textContent = "dal " + it(da.value) + " al " + it(a.value);
+    document.getElementById("res-tot-turni").textContent = turni;
+    document.getElementById("res-tot-ore").textContent = ore.toLocaleString("it-IT", {minimumFractionDigits: 1, maximumFractionDigits: 1});
+    document.getElementById("res-nome-stampa").textContent = nome.value;
+  }
+  da.addEventListener("change", aggiorna); a.addEventListener("change", aggiorna);
+  nome.addEventListener("input", () => { aggiorna(); try { localStorage.setItem("rendiconto_nome", nome.value); } catch (e) {} });
+  document.querySelectorAll("[data-res-da]").forEach(b => b.addEventListener("click", () => {
+    da.value = b.dataset.resDa; a.value = b.dataset.resA; aggiorna();
+  }));
+  document.getElementById("res-stampa").addEventListener("click", () => { aggiorna(); window.print(); });
+  aggiorna();
 }
 (async()=>{
   let pw = null; try{ pw = localStorage.getItem("rendiconto_pw"); }catch(e){}
@@ -1126,6 +1159,14 @@ def main():
     eventi = leggi_impegni(calendario, adesso)
     dati = analizza(leggi_storico(storico), leggi_statistiche(storico),
                     calendario, leggi_corsi(corsi), adesso, leggi_qualifiche(qualifiche), eventi)
+
+    import extra
+    prova_meteo = None
+    if len(sys.argv) >= 3 and sys.argv[1] == "--prova":
+        prova_meteo = Path(sys.argv[2]) / "meteo.json"
+        prova_meteo = prova_meteo if prova_meteo.exists() else None
+    meteo = extra.scarica_meteo(prova_meteo) if (prova_meteo or not (len(sys.argv) >= 3 and sys.argv[1] == "--prova")) else {}
+    extra.arricchisci_turni(dati["da_fare"], meteo, extra.carica_cosa_portare())
 
     if not dati["effettuati"] and not dati["da_fare"] and not dati["in_sospeso"]:
         sys.exit("ERRORE: nello storico non ho trovato nessun turno. La pagina di GAIA potrebbe essere cambiata.")

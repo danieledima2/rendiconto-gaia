@@ -136,6 +136,28 @@ def _descr(t, titolo_breve):
     return f'{_quando(t)} · {titolo_breve(t["turno"])} ({t["attivita"]})'
 
 
+def _descr_completa(t, titolo_breve, portare=True):
+    """Descrizione del turno con meteo, ora di partenza e (facoltativo) cosa portare."""
+    righe = [_descr(t, titolo_breve)]
+    try:
+        import extra
+        dettagli = []
+        if t.get("meteo"):
+            dettagli.append(extra.testo_meteo(t["meteo"]))
+        if t.get("partenza"):
+            dettagli.append(f'parti alle {t["partenza"]:%H:%M}')
+        if dettagli:
+            righe.append(" · ".join(dettagli))
+        if portare and t.get("portare"):
+            speciali = [x for x in t["portare"] if x not in ("Divisa completa", "Tesserino CRI",
+                                                             "Scarpe antinfortunistiche", "Guanti monouso")]
+            if speciali:
+                righe.append("Porta: " + ", ".join(speciali[:5]).lower())
+    except Exception:
+        pass
+    return "\n".join(righe)
+
+
 def prepara_notifiche(dati, stato, adesso, titolo_breve, notifica_disponibili=False):
     """Confronta i dati con lo stato precedente e ritorna (messaggi, nuovo_stato)."""
     primo_avvio = not stato
@@ -169,12 +191,12 @@ def prepara_notifiche(dati, stato, adesso, titolo_breve, notifica_disponibili=Fa
     for i, t in da_fare.items():
         mancano = (t["inizio"] - adesso).total_seconds() / 3600
         if 0 < mancano <= 4 and i not in s["promemoria_ora"]:
-            aggiungi("🚑 Turno fra poco", _descr(t, titolo_breve), "dafare")
+            aggiungi("🚑 Turno fra poco", _descr_completa(t, titolo_breve, portare=False), "dafare")
             s["promemoria_ora"][i] = ora
             s["promemoria_giorno"][i] = ora
         elif 4 < mancano <= 24 and i not in s["promemoria_giorno"]:
             quando = "Oggi" if t["inizio"].date() == adesso.date() else "Domani"
-            aggiungi(f"📅 {quando} sei di turno", _descr(t, titolo_breve), "dafare")
+            aggiungi(f"📅 {quando} sei di turno", _descr_completa(t, titolo_breve), "dafare")
             s["promemoria_giorno"][i] = ora
 
     r = dati["regola"]
@@ -198,6 +220,22 @@ def prepara_notifiche(dati, stato, adesso, titolo_breve, notifica_disponibili=Fa
             aggiungi("🎓 Nuova qualifica su GAIA", q["nome"], "qualifiche")
             s["qualifiche"][k] = ora
 
+    gruppi = {"comitato": (0,), "regione": (0, 1), "tutti": (0, 1, 2)}.get(
+        os.environ.get("NOTIFICA_CORSI", "regione").lower(), ())
+    prima_volta_corsi = "corsi" not in s
+    s.setdefault("corsi", {})
+    for c in dati.get("corsi", []):
+        chiave = c["link"] or c["nome"] + c["codice"]
+        if chiave in s["corsi"]:
+            continue
+        s["corsi"][chiave] = ora
+        if not prima_volta_corsi and c["gruppo"] in gruppi and not c["iniziato"]:
+            dove = c["sede"].replace("Comitato ", "").replace("di ", "", 1) if c["sede"] else ""
+            quando = f'inizia {c["inizio"]:%d/%m}' if c["inizio"] else ""
+            aggiungi(f"🎓 Nuovo corso · {dove}".strip(" ·"),
+                     f'{c["nome"]}' + (f" — {quando}" if quando else "") + f' · {c["richieste"]} richieste',
+                     "corsi")
+
     nuovi_scoperti = []
     for t in dati["disponibili"]:
         if t["id"] and t["id"] not in s["disponibili"]:
@@ -212,7 +250,7 @@ def prepara_notifiche(dati, stato, adesso, titolo_breve, notifica_disponibili=Fa
 
     # pulizia: dimentico le voci piu' vecchie di 120 giorni
     limite = adesso - timedelta(days=120)
-    for k in ("approvati", "promemoria_giorno", "promemoria_ora", "disponibili"):
+    for k in ("approvati", "promemoria_giorno", "promemoria_ora", "disponibili", "corsi"):
         s[k] = {i: v for i, v in s[k].items() if datetime.fromisoformat(v) > limite}
 
     if primo_avvio:
