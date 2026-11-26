@@ -32,10 +32,14 @@ COMITATO = os.environ.get("COMITATO", "Casarano")       # i corsi di questo comi
 REGIONE = os.environ.get("REGIONE", "puglia")           # poi quelli di questa regione
 SETTIMANE_CALENDARIO = int(os.environ.get("SETTIMANE_CALENDARIO", "4"))
 TETTO_ORE_TURNO = float(os.environ.get("TETTO_ORE_TURNO", "12"))  # oltre, il turno e' "sospetto"
+TURNI_RICHIESTI = int(os.environ.get("TURNI_RICHIESTI", "6"))      # regola: 6 turni...
+MESI_PERIODO = int(os.environ.get("MESI_PERIODO", "2"))            # ...ogni 2 mesi (gen-feb, mar-apr, ...)
 
 MESI = {"gen": 1, "feb": 2, "mar": 3, "apr": 4, "mag": 5, "giu": 6,
         "lug": 7, "ago": 8, "set": 9, "ott": 10, "nov": 11, "dic": 12}
 GIORNI = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"]
+MESI_NOMI = ["", "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio",
+             "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
 
 
 def pulisci(testo):
@@ -278,8 +282,11 @@ def analizza(storico, statistiche, calendario, corsi, adesso):
         if c["inizio"] and c["inizio"] <= adesso:
             c["iniziato"] = True
 
+    regola = calcola_regola(effettuati, da_fare, adesso)
+
     return {
         "adesso": adesso,
+        "regola": regola,
         "effettuati": effettuati, "da_fare": da_fare, "in_sospeso": in_sospeso, "altri": altri,
         "statistiche": statistiche, "anni": dict(sorted(anni.items(), reverse=True)),
         "attivita": sorted(attivita.items(), key=lambda kv: -kv[1]["ore_reali"]),
@@ -293,6 +300,59 @@ def analizza(storico, statistiche, calendario, corsi, adesso):
         "disponibili": sorted(disponibili, key=lambda t: t["inizio"]),
         "corsi": corsi_ord,
     }
+
+
+def inizio_periodo(d):
+    """Periodi fissi di MESI_PERIODO mesi: con 2 mesi -> gen-feb, mar-apr, mag-giu, ..."""
+    m = ((d.month - 1) // MESI_PERIODO) * MESI_PERIODO + 1
+    return datetime(d.year, m, 1, tzinfo=FUSO)
+
+
+def periodo_dopo(inizio):
+    m = inizio.month - 1 + MESI_PERIODO
+    return datetime(inizio.year + m // 12, m % 12 + 1, 1, tzinfo=FUSO)
+
+
+def nome_periodo(inizio):
+    fine = periodo_dopo(inizio) - timedelta(days=1)
+    if inizio.month == fine.month:
+        return f"{MESI_NOMI[inizio.month]} {inizio.year}"
+    return f"{MESI_NOMI[inizio.month][:3]}–{MESI_NOMI[fine.month][:3]} {fine.year}"
+
+
+def calcola_regola(effettuati, da_fare, adesso):
+    """Controllo della regola 'TURNI_RICHIESTI turni ogni MESI_PERIODO mesi'."""
+    ini = inizio_periodo(adesso)
+    fine = periodo_dopo(ini)
+    fatti = [t for t in effettuati if ini <= t["inizio"] < fine]
+    previsti = [t for t in da_fare if ini <= t["inizio"] < fine]
+    mancano = max(TURNI_RICHIESTI - len(fatti), 0)
+    mancano_con_previsti = max(TURNI_RICHIESTI - len(fatti) - len(previsti), 0)
+    giorni_rimasti = (fine.date() - adesso.date()).days
+    if mancano == 0:
+        livello, messaggio = "ok", f"In regola: {len(fatti)} turni fatti su {TURNI_RICHIESTI}."
+    elif mancano_con_previsti == 0:
+        livello, messaggio = "attenzione", (
+            f"{len(fatti)} turni fatti su {TURNI_RICHIESTI}: sarai in regola se svolgi "
+            f"i {len(previsti)} turni già programmati.")
+    else:
+        livello, messaggio = "allarme", (
+            f"Ti mancano {mancano_con_previsti} turni da prenotare entro "
+            f"{(fine - timedelta(days=1)):%d/%m} ({giorni_rimasti} giorni). "
+            f"Fatti {len(fatti)}, già programmati {len(previsti)}, richiesti {TURNI_RICHIESTI}.")
+
+    # periodi passati, dal primo turno dello storico
+    storico = []
+    if effettuati:
+        p = inizio_periodo(min(t["inizio"] for t in effettuati))
+        while p < ini:
+            f = periodo_dopo(p)
+            n = sum(1 for t in effettuati if p <= t["inizio"] < f)
+            storico.append({"nome": nome_periodo(p), "turni": n, "ok": n >= TURNI_RICHIESTI})
+            p = f
+    return {"nome": nome_periodo(ini), "fatti": len(fatti), "previsti": len(previsti),
+            "mancano": mancano_con_previsti, "giorni_rimasti": giorni_rimasti,
+            "livello": livello, "messaggio": messaggio, "storico": list(reversed(storico))}
 
 
 # ------------------------------------------------------------------ pagina web
@@ -315,10 +375,6 @@ def f_orario(t):
     if t["inizio"].date() == t["fine"].date():
         return f"{f_data(t['inizio'])}–{t['fine']:%H:%M}"
     return f"{f_data(t['inizio'])} → {f_data(t['fine'])}"
-
-
-MESI_NOMI = ["", "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio",
-             "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
 
 
 def titolo_breve(testo):
@@ -413,9 +469,26 @@ def costruisci_pagina(d):
             f'<li><a href="{e(t["link"])}" target="_blank" rel="noopener">{e(titolo_breve(t["turno"]))}</a> '
             f'({e(t["attivita"])}): {e(f_orario(t))} = <b>{f_ore(t["ore"])} ore</b> su GAIA</li>'
             for t in d["sospetti"])
-        sospetti = (f'<div class="box avviso"><b>⚠ Turni con durata sospetta</b> '
-                    f'(oltre {TETTO_ORE_TURNO:g} ore, probabilmente data di fine sbagliata). '
-                    f'Nelle "ore reali" contano {TETTO_ORE_TURNO:g} ore ciascuno:<ul>{voci}</ul></div>')
+        sospetti = (f'<details class="box avviso"><summary><b>⚠ {len(d["sospetti"])} turni con durata '
+                    f'sospetta</b> <span class="sub">(tocca per vedere)</span></summary>'
+                    f'<p class="sub">Durano più di {TETTO_ORE_TURNO:g} ore, probabilmente per una data di fine '
+                    f'sbagliata su GAIA. Nelle "ore reali" contano {TETTO_ORE_TURNO:g} ore ciascuno.</p>'
+                    f'<ul>{voci}</ul></details>')
+
+    r = d["regola"]
+    icone = {"ok": "✔", "attenzione": "⏳", "allarme": "⚠"}
+    pallini = "".join(
+        f'<span class="pallino {"pieno" if i < r["fatti"] else "previsto" if i < r["fatti"] + r["previsti"] else ""}"></span>'
+        for i in range(max(TURNI_RICHIESTI, r["fatti"] + r["previsti"])))
+    storico_regola = "".join(
+        f'<span class="tag {"verde" if p["ok"] else "rosso"}">{e(p["nome"])}: {p["turni"]}</span> '
+        for p in r["storico"][:6])
+    regola = (f'<div class="box regola {r["livello"]}"><div class="riga-regola">'
+              f'<b>{icone[r["livello"]]} Regola {TURNI_RICHIESTI} turni ogni {MESI_PERIODO} mesi · '
+              f'{e(r["nome"])}</b><div class="pallini">{pallini}</div></div>'
+              f'<div>{e(r["messaggio"])}</div>'
+              + (f'<details><summary class="sub">Periodi precedenti</summary><div>{storico_regola}</div></details>'
+                 if storico_regola else "") + '</div>')
 
     righe_att = "".join(
         f'<tr><td>{e(n)}</td><td class="n">{v["turni"]}</td><td class="n">{f_ore(v["ore_reali"])}</td></tr>'
@@ -423,7 +496,7 @@ def costruisci_pagina(d):
     tab_att = (f'<table><tr><th>Attività</th><th class="n">Turni</th><th class="n">Ore reali</th></tr>'
                f'{righe_att}</table>')
 
-    riepilogo = (f'<div class="cards">{html_cartelle}</div>{prossimo}{sospetti}'
+    riepilogo = (f'{regola}<div class="cards">{html_cartelle}</div>{prossimo}{sospetti}'
                  f'<h3>Monte ore per anno solare</h3><div class="scorri">{tab_anni}</div>{controllo}'
                  f'<h3>Monte ore ufficiale GAIA</h3><div class="scorri">{tab_gaia}</div>'
                  f'<h3>Per attività</h3><div class="scorri">{tab_att}</div>')
@@ -551,6 +624,20 @@ h4{margin:18px 0 6px;font-size:.95rem;color:var(--grigio);text-transform:upperca
 .box.evidenza{border-left:4px solid #1a7f37}
 .box.avviso{border-left:4px solid #d97706;background:#fffbeb}
 .box ul{margin:8px 0 0;padding-left:20px}
+details.box summary{cursor:pointer;list-style:none}
+details.box summary::-webkit-details-marker{display:none}
+details.box summary::before{content:"▸ ";color:var(--grigio)}
+details.box[open] summary::before{content:"▾ "}
+.regola{margin:0 0 12px;border-left:4px solid}
+.regola.ok{border-left-color:#1a7f37;background:#f0faf3}
+.regola.attenzione{border-left-color:#d97706;background:#fffbeb}
+.regola.allarme{border-left-color:#cc0000;background:#fdecec}
+.regola details{margin-top:8px}.regola details summary{cursor:pointer}
+.riga-regola{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.pallini{display:flex;gap:5px}
+.pallino{width:14px;height:14px;border-radius:50%;border:2px solid #bbb;background:#fff}
+.pallino.pieno{background:#1a7f37;border-color:#1a7f37}
+.pallino.previsto{border-color:#1a7f37;background:#cdebd5}
 .scorri{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--bordo);border-radius:12px;overflow:hidden;font-size:.92rem}
 th,td{padding:9px 10px;border-bottom:1px solid var(--bordo);text-align:left;vertical-align:top}
