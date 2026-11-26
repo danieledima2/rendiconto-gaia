@@ -270,7 +270,7 @@ def ore(t):
     return (t["fine"] - t["inizio"]).total_seconds() / 3600
 
 
-def analizza(storico, statistiche, calendario, corsi, adesso, qualifiche=None):
+def analizza(storico, statistiche, calendario, corsi, adesso, qualifiche=None, eventi=None):
     approvati = [t for t in storico if t["stato"].lower().startswith("approvat")]
     effettuati = sorted([t for t in approvati if t["fine"] <= adesso],
                         key=lambda t: t["inizio"], reverse=True)
@@ -321,6 +321,10 @@ def analizza(storico, statistiche, calendario, corsi, adesso, qualifiche=None):
 
     regola = calcola_regola(effettuati, da_fare, adesso)
 
+    import calendario_icloud
+    for t in disponibili + da_fare:
+        t["impegno"], t["impegni"] = (calendario_icloud.conflitti(t, eventi) if eventi else (None, []))
+
     return {
         "adesso": adesso,
         "regola": regola,
@@ -337,6 +341,7 @@ def analizza(storico, statistiche, calendario, corsi, adesso, qualifiche=None):
         "disponibili": sorted(disponibili, key=lambda t: t["inizio"]),
         "corsi": corsi_ord,
         "qualifiche": qualifiche or [],
+        "calendario_letto": eventi is not None,
     }
 
 
@@ -452,10 +457,23 @@ def tabella_turni(turni, colonne_extra=None, vuoto="Nessun turno.", per_mese=Fal
             f'<a class="voce" href="{e(t["link"])}" target="_blank" rel="noopener">'
             f'<div class="ora">{quando}</div>'
             f'<div class="cosa"><b>{e(titolo_breve(t["turno"]))}</b>'
-            f'<div class="sub">{e(t["attivita"])}</div>{segno}</div>'
+            f'<div class="sub">{e(t["attivita"])}</div>{segno}{riga_impegni(t)}</div>'
             f'<div class="posti">{extra}</div></a>')
     parti.append("</div>")
     return "".join(parti)
+
+
+def riga_impegni(t):
+    """Avviso 'sei gia' impegnato' con gli eventi del calendario iPhone di quel giorno."""
+    if not t.get("impegno"):
+        return ""
+    import calendario_icloud
+    voci = "<br>".join(e(calendario_icloud.descrivi(ev)) for ev in t["impegni"][:3])
+    if len(t["impegni"]) > 3:
+        voci += f"<br>e altri {len(t['impegni']) - 3}"
+    if t["impegno"] == "sovrapposto":
+        return f'<div class="impegno rosso">⚠ <b>Sei già impegnato a quest\'ora</b><br>{voci}</div>'
+    return f'<div class="impegno giallo">📅 <b>Questo giorno hai già un altro evento</b><br>{voci}</div>'
 
 
 def costruisci_pagina(d, file_calendario=""):
@@ -586,12 +604,16 @@ def costruisci_pagina(d, file_calendario=""):
                 f'<a class="voce{" mia" if t["mio"] else ""}" href="{e(t["link"])}" target="_blank" rel="noopener">'
                 f'<div class="ora">{t["inizio"]:%H:%M}–{t["fine"]:%H:%M}</div>'
                 f'<div class="cosa"><b>{e(t["attivita"])}</b>, {e(titolo_breve(t["turno"]))}'
-                f'<div class="sub">{e(t["comitato"])}{luogo}</div></div>'
+                f'<div class="sub">{e(t["comitato"])}{luogo}</div>'
+                f'{"" if t["mio"] else riga_impegni(t)}</div>'
                 f'<div class="posti">{e(posti)}<br>{tag}</div></a>')
         blocchi.append("</div>")
         scoperti = sum(1 for t in d["disponibili"] if t["scoperto"] and not t["mio"])
+        occupati = sum(1 for t in d["disponibili"] if not t["mio"] and t.get("impegno") == "sovrapposto")
+        nota_cal = (f' {occupati} si sovrappongono a impegni del tuo calendario.' if d["calendario_letto"]
+                    else ' (Calendario iPhone non collegato.)')
         disponibili = (f'<p class="sub">{len(d["disponibili"])} turni nel calendario, '
-                       f'{scoperti} con volontari mancanti. Tocca un turno per aprirlo su GAIA.</p>'
+                       f'{scoperti} con volontari mancanti.{nota_cal} Tocca un turno per aprirlo su GAIA.</p>'
                        + "".join(blocchi))
     else:
         disponibili = '<p class="vuoto">Nessun turno disponibile nel calendario.</p>'
@@ -756,6 +778,8 @@ td a{font-weight:600;text-decoration:none}
 .tag.giallo{background:#fff4d6;color:#8a5a00}.tag.grigio{background:#eee;color:#555}.tag.blu{background:#e7f0fd;color:#1859b5}
 .vuoto{color:var(--grigio);font-style:italic}
 .voce.spenta{opacity:.6}
+.impegno{margin-top:6px;padding:6px 9px;border-radius:9px;font-size:.82rem;line-height:1.35}
+.impegno.rosso{background:#fde8e8;color:#8f0000}.impegno.giallo{background:#fff4d6;color:#6b4600}
 .bottone.grande{padding:12px 18px;font-size:1rem;border:0;margin:10px 0;cursor:pointer}
 button.bottone{border:0;cursor:pointer;font-family:inherit}
 textarea{width:100%;box-sizing:border-box;font-family:monospace;font-size:.75rem;border:1px solid var(--bordo);border-radius:10px;padding:8px;margin:6px 0}
@@ -1041,6 +1065,33 @@ def scarica_da_gaia(email, password):
     return storico, calendari, corsi, qualifiche
 
 
+def leggi_impegni(calendario, adesso):
+    """Eventi del calendario iCloud (o del file di prova). None = calendario non collegato."""
+    fine = max([t["fine"] for t in calendario] + [adesso]) + timedelta(days=2)
+    if len(sys.argv) >= 3 and sys.argv[1] == "--prova":
+        f = Path(sys.argv[2]) / "eventi.json"
+        if not f.exists():
+            return None
+        eventi = []
+        for ev in json.loads(f.read_text(encoding="utf-8")):
+            eventi.append({"titolo": ev["titolo"], "tutto_giorno": ev.get("tutto_giorno", False),
+                           "inizio": datetime.fromisoformat(ev["inizio"]).replace(tzinfo=FUSO),
+                           "fine": datetime.fromisoformat(ev["fine"]).replace(tzinfo=FUSO)})
+        return eventi
+    email, pw = os.environ.get("ICLOUD_EMAIL"), os.environ.get("ICLOUD_PASSWORD_APP")
+    if not email or not pw:
+        return None
+    try:
+        import calendario_icloud
+        inizio = adesso.replace(hour=0, minute=0, second=0, microsecond=0)
+        eventi, n_cal = calendario_icloud.leggi_eventi_icloud(email, pw, inizio, fine)
+        print(f"Calendario iCloud: {n_cal} calendari letti, {len(eventi)} eventi.")
+        return eventi
+    except Exception as errore:
+        print(f"Avviso: calendario iCloud non letto ({type(errore).__name__}). Controlla ICLOUD_EMAIL e ICLOUD_PASSWORD_APP.")
+        return None
+
+
 # ------------------------------------------------------------------ avvio
 def main():
     adesso = datetime.now(FUSO)
@@ -1072,8 +1123,9 @@ def main():
                 visti.add(chiave)
                 calendario.append(t)
 
+    eventi = leggi_impegni(calendario, adesso)
     dati = analizza(leggi_storico(storico), leggi_statistiche(storico),
-                    calendario, leggi_corsi(corsi), adesso, leggi_qualifiche(qualifiche))
+                    calendario, leggi_corsi(corsi), adesso, leggi_qualifiche(qualifiche), eventi)
 
     if not dati["effettuati"] and not dati["da_fare"] and not dati["in_sospeso"]:
         sys.exit("ERRORE: nello storico non ho trovato nessun turno. La pagina di GAIA potrebbe essere cambiata.")
